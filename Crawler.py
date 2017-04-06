@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 import sys
 import threading
 import sqlite3
+from datetime import datetime, date
 
 class node():
     def __init__(self, url, level):
@@ -35,12 +36,13 @@ consonants = {'ক' : 0, 'খ' : 0, 'গ' : 0, 'ঘ' : 0, 'ঙ' : 0,
                 'স' : 0, 'হ' : 0, 'ৎ': 0, 'ড়' : 0, 'ঢ়' : 0,
                 'য়' : 0, 'ং' : 0, 'ঃ' : 0}
 crawl_queue = queue.Queue()
-ignored_extensions = [ ".jpg", ".png", ".gif", ".tif", ".bmp", ".raw", ".pdf" ]
+ignored_extensions = [ ".jpg", ".png", ".gif", ".tif", ".bmp", ".raw", ".pdf", ".svg" ]
 u_nw = chr(0x000d)
 base_url = "https://bn.wikipedia.org"
 
-def add_starting_url(href):
-    crawl_queue.put(href)
+def add_starting_url(href, level,):
+    global crawl_queue
+    crawl_queue.put(node(href,level))
     
 def set_is_active(value):
     global is_active
@@ -82,13 +84,15 @@ def calculate_frequency(text):
             if  not special_case(c, nc):
                 consonants[c] += 1
             
-def print_frequency(connection):
+def save_frequency(connection):
     cursor = connection.cursor()
     for key, value in vowels.items():
-        #increments count. must save state of search on exit
         cursor.execute("update alphabet set count=count+? where character=?", [value,key])
+        vowels[key] = 0
     for key, value in consonants.items():
         cursor.execute("update alphabet set count=count+? where character=?", [value,key])
+        consonants[key] = 0
+    connection.commit()
 
 '''
     # clear file
@@ -127,7 +131,7 @@ def process_links(links, level):
             hashed_obj = hashlib.md5(href.encode())
             hash_digest = hashed_obj.hexdigest()
             if hash_digest not in url_hashs:
-                url_hashs[hash_digest] = 1
+                url_hashs[hash_digest] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 crawl_queue.put( node( href , level))
         
 
@@ -144,24 +148,53 @@ def close_connection(connection):
         return True
     except:
         return False
-        
+
+def save_url_hashs(connection, url_hashs):
+    cursor = connection.cursor()
+    for key,value in url_hashs.items():
+        cursor.execute("insert or ignore into history (digest,time) values (?,?)", [ key, value ] )
+
+def prepare_url_hashs(connection,url_hashs):
+    cursor = connection.cursor()
+    digests = cursor.execute("select * from history order by time desc limit 1000000").fetchall()
+    for h in digests:
+        url_hashs[h[0]] = h[1]
+    
+# so that next run can resume
+def save_queue_remainder(connection, my_queue):
+    cursor = connection.cursor()
+    # remove all previously stored urls
+    cursor.execute("delete from queue_remainder")
+    # add all urls from my_queue to db
+    while not my_queue.empty():
+        n = my_queue.get()
+        cursor.execute("insert into queue_remainder (url, level) values (?, ?)",[n.get_url(), n.get_level()])
+
+# restore previous state of queue
+def prepare_queue(connection, my_queue):
+    cursor = connection.cursor()
+    # get all previously stored urls
+    nodes = cursor.execute("select * from queue_remainder")
+    for n in nodes:
+        my_queue.put(node(n[0], n[1] ))
+    
 
 def main():
     global is_active
-
+    global url_hashs
+    global crawl_queue
+    
     # connect to sqlite3 db
     connection = connect_to_db( "bangla_dictionary.db")
+    # prepare url_hash dictionary
+    prepare_url_hashs(connection, url_hashs)
+    # prepare crawl_queue
+    prepare_queue(connection, crawl_queue)
     
-    # setup initial node
-    my_url = "https://bn.wikipedia.org/wiki/%E0%A6%86%E0%A6%87%E0%A6%9C%E0%A6%BE%E0%A6%95_%E0%A6%A8%E0%A6%BF%E0%A6%89%E0%A6%9F%E0%A6%A8"
-    # my_url = "https://bn.wikipedia.org/wiki/%E0%A6%A2%E0%A6%BE%E0%A6%95%E0%A6%BE"
-    start_node = node(my_url,2)
-    crawl_queue.put(start_node)
     links_visited = 0
     is_active = True
-        
-    # start of dfs
-    
+
+    # start crawling while not quit and has at least one node to visit
     while not is_quit and not crawl_queue.empty():
         # crawling is paused so continue to next cycle
         if not is_active:
@@ -171,11 +204,16 @@ def main():
             cur_node = crawl_queue.get()
             # get its url
             my_url = cur_node.get_url()
-            # prepare webpage
-            sauce = urllib.request.urlopen(my_url).read()     
-            soup = bs.BeautifulSoup(sauce,'lxml')
-            # show page title after every calculation
-            print(soup.title.string)
+
+            try:
+                # prepare webpage
+                sauce = urllib.request.urlopen(my_url).read()     
+                soup = bs.BeautifulSoup(sauce,'lxml')
+                # show page title after every calculation
+                # print(soup.title.string)
+            except:
+                print("problem pasing page: "+ str(soup.title))
+                continue
             
             # get div named bodyContent
             body = soup.find("div", {"id" : "bodyContent"})
@@ -189,10 +227,20 @@ def main():
             # analyze each para and find frequency
             for p in paras:
                 bangla_string = p.text
-                calculate_frequency(bangla_string)        
+                calculate_frequency(bangla_string)
 
+            # so that sudden error doesn't cause big data loss, we save data every 50 links visited
+            links_visited += 1
+            if links_visited % 50 == 0:
+                save_frequency(connection)
+                print("saved: "+str(links_visited)+ " links visited") 
 
-    print_frequency(connection)
+    # exiting so save frequency data
+    save_frequency(connection)
+    # save urls visited
+    save_url_hashs(connection, url_hashs)
+    # save remaining queue nodes
+    save_queue_remainder(connection, crawl_queue)
     
     if close_connection(connection):
         print("end")

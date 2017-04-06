@@ -19,6 +19,12 @@ class myThread (threading.Thread):
 def stop_crawler():
         Crawler.set_is_active(False)
 
+def add_initial_nodes():
+      # setup initial nodes    
+       Crawler.add_starting_url("https://bn.wikipedia.org/wiki/%E0%A6%86%E0%A6%87%E0%A6%9C%E0%A6%BE%E0%A6%95_%E0%A6%A8%E0%A6%BF%E0%A6%89%E0%A6%9F%E0%A6%A8", 3)
+       Crawler.add_starting_url("https://bn.wikipedia.org/wiki/%E0%A6%AC%E0%A6%BE%E0%A6%82%E0%A6%B2%E0%A6%BE%E0%A6%A6%E0%A7%87%E0%A6%B6", 3)
+       Crawler.add_starting_url("https://bn.wikipedia.org/wiki/%E0%A6%B0%E0%A6%AC%E0%A7%80%E0%A6%A8%E0%A7%8D%E0%A6%A6%E0%A7%8D%E0%A6%B0%E0%A6%A8%E0%A6%BE%E0%A6%A5_%E0%A6%A0%E0%A6%BE%E0%A6%95%E0%A7%81%E0%A6%B0", 3)
+      
 
 crawler_created = False
 def start_crawler():
@@ -50,6 +56,10 @@ class Example(Frame):
         stopButton = Button(self, text="Stop",
             command=stop_crawler)
         stopButton.place(x=150, y=50)
+
+        addNode = Button(self, text="Add Nodes",
+            command=add_initial_nodes)
+        addNode.place(x=100, y=100)
         
 root = Tk()
 
